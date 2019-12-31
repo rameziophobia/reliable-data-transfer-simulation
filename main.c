@@ -41,7 +41,7 @@ struct pkt
 };
 
 /********* STUDENTS WRITE THE NEXT SEVEN ROUTINES *********/
-#define TIMER_INTERVAL 13
+#define TIMER_INTERVAL 17
 
 uint32_t calculateChecksum(struct pkt packet);
 void tolayer5(int AorB, char datasent[20]);
@@ -105,16 +105,20 @@ void A_input(struct pkt packet)
     /* stop timer*/
     stoptimer(0);
     /* check if ack is ok*/
-
+    if(calculateChecksum(packet) != packet.checksum){
+        printf("ack packet is corrupted, restarting timer and resending last packet\n");
+        starttimer(0, TIMER_INTERVAL);
+        tolayer3(0, lastPacketSent);
+    }
     /*check if ack no == send no */
-    if (lastPacketSent.seqnum == packet.acknum && calculateChecksum(packet) == packet.checksum)
+    if (lastPacketSent.seqnum == packet.acknum)
     {
         waiting_ack = false;
         printf("recieved correct ack %d, ending timer\n", packet.acknum);
     }
     else
     {
-        printf("recieved nack, restarting timer\n");
+        printf("recieved nack, restarting timer and resending last packet\n");
         starttimer(0, TIMER_INTERVAL);
         tolayer3(0, lastPacketSent);
     }
