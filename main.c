@@ -1,5 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
 
 /* ******************************************************************
  ALTERNATING BIT AND GO-BACK-N NETWORK EMULATOR: VERSION 1.1  J.F.Kurose
@@ -38,22 +41,54 @@ struct pkt
 };
 
 /********* STUDENTS WRITE THE NEXT SEVEN ROUTINES *********/
+#define TIMER_INTERVAL 13
 
+uint32_t calculateChecksum(struct pkt packet);
+void tolayer5(int AorB, char datasent[20]);
+void tolayer3(int AorB, struct pkt packet);
+void starttimer(int AorB, float increment);
+void stoptimer(int AorB);
+
+uint8_t aCurrentSequenceNum;
+struct pkt lastPacketSent;
+bool waiting_ack;
+
+uint8_t expected_ack;
 /* called from layer 5, passed the data to be sent to other side */
 void A_output(struct msg message)
 {
-    int i, j;   
+    printf("A sending msg: %s\n", message.data);
+    if (waiting_ack)
+    {
+        printf("A waiting for ack, dropping msg: %s\n", message.data);
+        return;
+    }
+    struct pkt packet;
+    packet.seqnum = aCurrentSequenceNum;
+    memcpy(&packet.payload, &message, sizeof(message));
+    packet.acknum = 0;
+    packet.checksum = ~calculateChecksum(packet);
+    aCurrentSequenceNum = (aCurrentSequenceNum + 1) % 2;
 
-    i = 0;
-    j = 0;
+    lastPacketSent = packet;
+    memcpy(&lastPacketSent.payload, &message, sizeof(message));
+    waiting_ack = true;
 
-    printf("now in A_output\n");
+    tolayer3(0, packet);
+    starttimer(0, TIMER_INTERVAL); //todo el rakam da ad eh ?
+}
 
+
+uint32_t calculateChecksum(struct pkt packet)
+{
+    uint32_t checksum = packet.seqnum;
+    checksum += packet.acknum;
+    uint8_t i;
     for (i = 0; i < 20; i++)
     {
-        j = j + (int)message.data[i];
+        checksum = checksum + (uint8_t)packet.payload[i];
     }
-    printf("j is %d %d\n", j, (int)('a'));
+    return checksum;
 }
 
 void B_output(struct msg message) /* need be completed only for extra credit */
@@ -64,11 +99,23 @@ void B_output(struct msg message) /* need be completed only for extra credit */
 /* called from layer 3, when a packet arrives for layer 4 */
 void A_input(struct pkt packet)
 {
+    //todo revise logic 
     /* stop timer*/
     stoptimer(0);
     /* check if ack is ok*/
 
     /*check if ack no == send no */
+    if (lastPacketSent.seqnum == packet.acknum && calculateChecksum(packet) == packet.checksum)
+    {
+        waiting_ack = false;
+        printf("recieved correct ack %d, ending timer\n", packet.acknum);
+    }
+    else
+    {
+        printf("recieved nack, restarting timer\n");
+        starttimer(0, TIMER_INTERVAL);
+        tolayer3(0, lastPacketSent);
+    }
 
     /*if not resent last packet */
 
@@ -78,12 +125,17 @@ void A_input(struct pkt packet)
 /* called when A's timer goes off */
 void A_timerinterrupt(void)
 {
+    starttimer(0, TIMER_INTERVAL);
+    tolayer3(0, lastPacketSent);
+    printf("timer interrupted, A resending last packet: %s\n", lastPacketSent.payload);
 }
 
 /* the following routine will be called once (only) before any other */
 /* entity A routines are called. You can use it to do any initialization */
 void A_init(void)
 {
+    aCurrentSequenceNum = 0;
+    waiting_ack = false;
 }
 
 /* Note that with simplex transfer from a-to-B, there is no B_output() */
@@ -91,6 +143,32 @@ void A_init(void)
 /* called from layer 3, when a packet arrives for layer 4 at B*/
 void B_input(struct pkt packet)
 {
+    printf("B recieved packet: %s\n", packet.payload);
+    uint32_t checksum = calculateChecksum(packet);
+    struct pkt ackPacket;
+    if (packet.checksum + checksum + 1 == 0 &&
+        packet.seqnum == expected_ack) //todo revise logic
+    {
+        ackPacket.acknum = packet.seqnum;
+        ackPacket.checksum = calculateChecksum(ackPacket);
+        expected_ack = (expected_ack + 1) % 2;
+        tolayer3(1, ackPacket);
+        tolayer5(1, packet.payload);
+        printf("packet is valid\n");
+        printf("sending ack %d\n", ackPacket.acknum);
+    }
+    else
+    {
+        uint32_t nack = (packet.acknum + 1) % 2;
+        ackPacket.acknum = nack;
+        ackPacket.checksum = calculateChecksum(ackPacket);
+        tolayer3(1, ackPacket);
+        if (packet.checksum + checksum + 1 != 0)
+            printf("packet is corrupted\n");
+        else
+            printf("packet has wrong seqnum, expected: %d, got: %d\n", expected_ack, packet.seqnum);
+        printf("sending nack %d\n", nack);
+    }
 }
 
 /* called when B's timer goes off */
@@ -102,6 +180,7 @@ void B_timerinterrupt(void)
 /* entity B routines are called. You can use it to do any initialization */
 void B_init(void)
 {
+    expected_ack = 0;
 }
 
 /*****************************************************************
@@ -376,7 +455,7 @@ printevlist(void)
 /********************** Student-callable ROUTINES ***********************/
 
 /* called by students routine to cancel a previously-started timer */
-stoptimer(int AorB) /* A or B is trying to stop timer */
+void stoptimer(int AorB) /* A or B is trying to stop timer */
 {
     struct event *q, *qold;
 
@@ -505,7 +584,7 @@ void tolayer3(int AorB, struct pkt packet) /* A or B is trying to stop timer */
     insertevent(evptr);
 }
 
-tolayer5(int AorB, char datasent[20])
+void tolayer5(int AorB, char datasent[20])
 {
     int i;
     if (TRACE > 2)
