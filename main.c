@@ -48,6 +48,8 @@ void tolayer5(int AorB, char datasent[20]);
 void tolayer3(int AorB, struct pkt packet);
 void starttimer(int AorB, float increment);
 void stoptimer(int AorB);
+void sendAck(uint8_t ack);
+void sendNack(uint8_t ack);
 
 uint8_t aCurrentSequenceNum;
 struct pkt lastPacketSent;
@@ -145,30 +147,39 @@ void B_input(struct pkt packet)
 {
     printf("B recieved packet: %s\n", packet.payload);
     uint32_t checksum = calculateChecksum(packet);
-    struct pkt ackPacket;
-    if (packet.checksum + checksum + 1 == 0 &&
-        packet.seqnum == expected_ack) //todo revise logic
-    {
-        ackPacket.acknum = packet.seqnum;
-        ackPacket.checksum = calculateChecksum(ackPacket);
-        expected_ack = (expected_ack + 1) % 2;
-        tolayer3(1, ackPacket);
-        tolayer5(1, packet.payload);
+    if (packet.checksum + checksum + 1 != 0){
+        printf("packet is corrupted\n");
+        sendNack(packet.seqnum);
+        return;
+    }
+    else if(packet.seqnum != expected_ack){//todo revise logic
+        printf("packet is a duplicate, expected seqnum: %d, got: %d\n", expected_ack, packet.seqnum);
+        sendAck(packet.seqnum);
+        return;
+    }
+    else{
         printf("packet is valid\n");
-        printf("sending ack %d\n", ackPacket.acknum);
+        expected_ack = (expected_ack + 1) % 2;
+        sendAck(packet.seqnum);
+        tolayer5(1, packet.payload);
     }
-    else
-    {
-        uint32_t nack = (packet.acknum + 1) % 2;
-        ackPacket.acknum = nack;
-        ackPacket.checksum = calculateChecksum(ackPacket);
-        tolayer3(1, ackPacket);
-        if (packet.checksum + checksum + 1 != 0)
-            printf("packet is corrupted\n");
-        else
-            printf("packet has wrong seqnum, expected: %d, got: %d\n", expected_ack, packet.seqnum);
-        printf("sending nack %d\n", nack);
-    }
+}
+
+void sendAck(uint8_t ack){
+    struct pkt ackPacket;
+    ackPacket.acknum = ack;
+    ackPacket.checksum = calculateChecksum(ackPacket);
+    tolayer3(1, ackPacket);
+    printf("sending ack %d\n", ack);
+}
+
+void sendNack(uint8_t ack){
+    struct pkt ackPacket;
+    uint8_t nack = (ack + 1) % 2;
+    ackPacket.acknum = nack;
+    ackPacket.checksum = calculateChecksum(ackPacket);
+    tolayer3(1, ackPacket);
+    printf("sending nack %d\n", nack);
 }
 
 /* called when B's timer goes off */
