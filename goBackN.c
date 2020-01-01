@@ -47,33 +47,101 @@ void tolayer3(int AorB, struct pkt packet);
 void starttimer(int AorB, float increment);
 void stoptimer(int AorB);
 
-/* called from layer 5, passed the data to be sent to other side */
-void A_output(struct msg message)
-{
-    int i, j;   
+/*              DEFINES               */
 
-    i = 0;
-    j = 0;
+#define PACKET_BUFFER_SIZE 51
+#define WINDOW_SIZE 8
+#define TIMER_INCREMENT 15
 
-    printf("now in A_output\n");
+/*              END DEFINES           */
 
-    for (i = 0; i < 20; i++)
-    {
-        j = j + (int)message.data[i];
-    }
-    printf("j is %d %d\n", j, (int)('a'));
-}
+/*              Variables A               */
+
+struct pkt pktBuffer[PACKET_BUFFER_SIZE];
+int pktBufferBase;
+int pktBufferNewIndex;
+int currentSeq;
+float pktTimeSent[PACKET_BUFFER_SIZE];
+
+float time = 0.000;
+
+/*              End Variables A           */
+
+/*              Variables B               */
+
+int expectedSeq;
+
+/*              End Variables B           */
+
+/*              Utility               */
 
 uint32_t calculateChecksum(struct pkt packet)
 {
-    uint32_t checksum = packet.seqnum;
-    checksum += packet.acknum;
-    uint8_t i;
-    for (i = 0; i < 20; i++)
+    uint32_t checksum = packet.seqnum + packet.acknum;
+    for (uint8_t i = 0; i < 20; i++)
     {
         checksum = checksum + (uint8_t)packet.payload[i];
     }
     return checksum;
+}
+
+int isPacketNotCorrupt(struct pkt packet){
+    return packet.checksum + calculateChecksum(packet) == -1;
+}
+
+void resendWinodw(void){
+    int sendingEndIndex = pktBufferBase+WINDOW_SIZE < pktBufferNewIndex ? pktBufferBase+WINDOW_SIZE : pktBufferNewIndex;
+    for (int i = pktBufferBase; i < sendingEndIndex; i++)
+    {
+        printf("Resending Packet Seq %d\n",i);
+        tolayer3(0, pktBuffer[i]);
+    }
+    starttimer(0, TIMER_INCREMENT);
+}
+
+void sendAck(uint8_t ack){
+    struct pkt ackPacket;
+    ackPacket.acknum = ack;
+    ackPacket.checksum = calculateChecksum(ackPacket);
+    printf("Sending Ack: %d\n", ack);
+    tolayer3(1, ackPacket);
+}
+
+/*              End Utility           */
+
+/* called from layer 5, passed the data to be sent to other side */
+void A_output(struct msg message)
+{
+    printf("Attempting to send msg from A, msg: %s\n", message.data);
+    if (pktBufferNewIndex == PACKET_BUFFER_SIZE - 1)
+    {
+        printf("Buffer Full, Dropping packet(msg: %s)\n", message.data);
+        return;
+    }
+
+    struct pkt newPacket;
+    newPacket.seqnum = currentSeq;
+    currentSeq++;
+    memcpy(&newPacket.payload, &message, sizeof(message));
+    newPacket.acknum = 0;
+    newPacket.checksum = ~calculateChecksum(newPacket);
+
+    pktBuffer[pktBufferNewIndex] = newPacket;
+    pktBufferNewIndex++;
+
+    if (pktBufferBase + WINDOW_SIZE > pktBufferNewIndex)
+    {
+        printf("Window Not Full, Sending Packet, Seq: %d\n", newPacket.seqnum);
+        tolayer3(0, newPacket);
+        if(pktBufferNewIndex-1 == pktBufferBase){
+            starttimer(0, TIMER_INCREMENT);
+        }else{
+            pktTimeSent[pktBufferNewIndex-1] = time;
+        }
+    }else{
+        printf("Window Full, Caching Packet, Seq: %d\n", pktBufferNewIndex-1);
+    }
+
 }
 
 void B_output(struct msg message) /* need be completed only for extra credit */
@@ -84,26 +152,43 @@ void B_output(struct msg message) /* need be completed only for extra credit */
 /* called from layer 3, when a packet arrives for layer 4 */
 void A_input(struct pkt packet)
 {
-    /* stop timer*/
-    stoptimer(0);
-    /* check if ack is ok*/
-
-    /*check if ack no == send no */
-
-    /*if not resent last packet */
-
-    /*if yes increment seq_no and exit */
+    printf("Packet Recieved At A\n");
+    if(calculateChecksum(packet) == packet.checksum){
+        printf("Packet Valid, Ack: %d\n", packet.acknum);
+        if(packet.acknum == pktBufferBase){
+            stoptimer(0);
+            pktBufferBase++;
+            if (pktBufferBase + WINDOW_SIZE <= pktBufferNewIndex)
+            {
+                tolayer3(0, pktBuffer[pktBufferBase + WINDOW_SIZE]);
+                printf("Sending New Packet, Seq: %d\n", pktBuffer[pktBufferBase + WINDOW_SIZE].seqnum);
+                pktTimeSent[pktBufferBase + WINDOW_SIZE] = time;
+            }
+            if (pktBufferBase < pktBufferNewIndex){
+                starttimer(0, TIMER_INCREMENT);
+            }
+        }else{
+            printf("Packet Ignored, Expecting: %d\n", pktBufferBase);
+        }
+    }else{
+        stoptimer(0);
+        printf("Packet Corrupted, Resending Winodw\n");
+        resendWinodw();
+    }
 }
 
 /* called when A's timer goes off */
 void A_timerinterrupt(void)
 {
+    printf("Timer A Interrupt, Resending Window\n");
+    resendWinodw();
 }
 
 /* the following routine will be called once (only) before any other */
 /* entity A routines are called. You can use it to do any initialization */
 void A_init(void)
 {
+    pktBufferBase = pktBufferNewIndex = currentSeq = 0;
 }
 
 /* Note that with simplex transfer from a-to-B, there is no B_output() */
@@ -111,6 +196,18 @@ void A_init(void)
 /* called from layer 3, when a packet arrives for layer 4 at B*/
 void B_input(struct pkt packet)
 {
+    printf("Packet Recieved At B\n");
+    if(isPacketNotCorrupt(packet)){
+        printf("Packet NOT Corrupted, Expecting: %d, Got: %d\n", expectedSeq, packet.seqnum);
+        sendAck(packet.seqnum > expectedSeq ? expectedSeq-1: packet.seqnum);
+        if(packet.seqnum == expectedSeq){
+            printf("Sending Msg to Layer 5, Msg: %s\n", packet.payload);
+            expectedSeq++;
+            tolayer5(1, packet.payload);
+        }
+    }else{
+        printf("Packet Corrupted\n");
+    }
 }
 
 /* called when B's timer goes off */
@@ -122,6 +219,7 @@ void B_timerinterrupt(void)
 /* entity B routines are called. You can use it to do any initialization */
 void B_init(void)
 {
+    expectedSeq = 0;
 }
 
 /*****************************************************************
@@ -164,7 +262,7 @@ struct event *evlist = NULL; /* the event list */
 int TRACE = 1;   /* for my debugging */
 int nsim = 0;    /* number of messages from 5 to 4 so far */
 int nsimmax = 0; /* number of msgs to generate, then stop */
-float time = 0.000;
+//float time = 0.000;
 float lossprob;    /* probability that a packet is dropped  */
 float corruptprob; /* probability that one bit is packet is flipped */
 float lambda;      /* arrival rate of messages from layer 5 */
