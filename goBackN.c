@@ -396,7 +396,7 @@ printevlist(void)
 /********************** Student-callable ROUTINES ***********************/
 
 /* called by students routine to cancel a previously-started timer */
-stoptimer(int AorB) /* A or B is trying to stop timer */
+void stoptimer(int AorB) /* A or B is trying to stop timer */
 {
     struct event *q, *qold;
 
