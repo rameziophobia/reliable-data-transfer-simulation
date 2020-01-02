@@ -59,21 +59,21 @@ uint8_t expected_ack;
 /* called from layer 5, passed the data to be sent to other side */
 void A_output(struct msg message)
 {
-    printf("A sending msg: %s\n", message.data);
+    printf("A sending msg: '%.*s'\n", 20, message.data);
     if (waiting_ack)
     {
-        printf("A waiting for ack, dropping msg: %s\n", message.data);
+        printf("A waiting for ack, dropping msg: '%.*s'\n", 20, message.data);
         return;
     }
     struct pkt packet;
     packet.seqnum = aCurrentSequenceNum;
-    memcpy(&packet.payload, &message, sizeof(message));
+    memcpy(&packet.payload, &message, 20);
     packet.acknum = 0;
     packet.checksum = ~calculateChecksum(packet);
     aCurrentSequenceNum = (aCurrentSequenceNum + 1) % 2;
 
     lastPacketSent = packet;
-    memcpy(&lastPacketSent.payload, &message, sizeof(message));
+    memcpy(&lastPacketSent.payload, &message, 20);
     waiting_ack = true;
 
     tolayer3(0, packet);
@@ -111,7 +111,7 @@ void A_input(struct pkt packet)
         tolayer3(0, lastPacketSent);
     }
     /*check if ack no == send no */
-    if (lastPacketSent.seqnum == packet.acknum)
+    else if (lastPacketSent.seqnum == packet.acknum)
     {
         waiting_ack = false;
         printf("recieved correct ack %d, ending timer\n", packet.acknum);
@@ -162,7 +162,7 @@ void B_input(struct pkt packet)
         return;
     }
     else{
-        printf("packet is valid\n");
+        printf("B recieved valid packet '%.*s'\n", 20, packet.payload);
         expected_ack = (expected_ack + 1) % 2;
         sendAck(packet.seqnum);
         tolayer5(1, packet.payload);
