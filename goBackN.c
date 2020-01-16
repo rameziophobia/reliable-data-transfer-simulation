@@ -61,7 +61,6 @@ struct pkt pktBuffer[PACKET_BUFFER_SIZE];
 int pktBufferBase;
 int pktBufferNewIndex;
 int currentSeq;
-float pktTimeSent[PACKET_BUFFER_SIZE];
 
 float time = 0.000;
 
@@ -89,7 +88,7 @@ int isPacketNotCorrupt(struct pkt packet){
     return packet.checksum + calculateChecksum(packet) == -1;
 }
 
-void resendWinodw(void){
+void resendWindow(void){
     int sendingEndIndex = pktBufferBase+WINDOW_SIZE < pktBufferNewIndex ? pktBufferBase+WINDOW_SIZE : pktBufferNewIndex;
     for (int i = pktBufferBase; i < sendingEndIndex; i++)
     {
@@ -135,8 +134,6 @@ void A_output(struct msg message)
         tolayer3(0, newPacket);
         if(pktBufferNewIndex-1 == pktBufferBase){
             starttimer(0, TIMER_INCREMENT);
-        }else{
-            pktTimeSent[pktBufferNewIndex-1] = time;
         }
     }else{
         printf("Window Full, Caching Packet, Seq: %d\n", pktBufferNewIndex-1);
@@ -152,7 +149,7 @@ void B_output(struct msg message) /* need be completed only for extra credit */
 /* called from layer 3, when a packet arrives for layer 4 */
 void A_input(struct pkt packet)
 {
-    printf("Packet Recieved At A\n");
+    printf("Packet Received At A\n");
     if(calculateChecksum(packet) == packet.checksum){
         printf("Packet Valid, Ack: %d\n", packet.acknum);
         if(packet.acknum == pktBufferBase){
@@ -162,7 +159,6 @@ void A_input(struct pkt packet)
             {
                 tolayer3(0, pktBuffer[pktBufferBase + WINDOW_SIZE]);
                 printf("Sending New Packet, Seq: %d\n", pktBuffer[pktBufferBase + WINDOW_SIZE].seqnum);
-                pktTimeSent[pktBufferBase + WINDOW_SIZE] = time;
             }
             if (pktBufferBase < pktBufferNewIndex){
                 starttimer(0, TIMER_INCREMENT);
@@ -172,8 +168,8 @@ void A_input(struct pkt packet)
         }
     }else{
         stoptimer(0);
-        printf("Packet Corrupted, Resending Winodw\n");
-        resendWinodw();
+        printf("Packet Corrupted, Resending window\n");
+        resendWindow();
     }
 }
 
@@ -181,7 +177,7 @@ void A_input(struct pkt packet)
 void A_timerinterrupt(void)
 {
     printf("Timer A Interrupt, Resending Window\n");
-    resendWinodw();
+    resendWindow();
 }
 
 /* the following routine will be called once (only) before any other */
@@ -196,7 +192,7 @@ void A_init(void)
 /* called from layer 3, when a packet arrives for layer 4 at B*/
 void B_input(struct pkt packet)
 {
-    printf("Packet Recieved At B\n");
+    printf("Packet Received At B\n");
     if(isPacketNotCorrupt(packet)){
         printf("Packet NOT Corrupted, Expecting: %d, Got: %d\n", expectedSeq, packet.seqnum);
         sendAck(packet.seqnum > expectedSeq ? expectedSeq-1: packet.seqnum);
