@@ -51,7 +51,7 @@ void stoptimer(int AorB);
 
 #define PACKET_BUFFER_SIZE 51
 #define WINDOW_SIZE 8
-#define TIMER_INCREMENT 15
+#define TIMER_INCREMENT 17
 
 /*              END DEFINES           */
 
@@ -84,21 +84,24 @@ uint32_t calculateChecksum(struct pkt packet)
     return checksum;
 }
 
-int isPacketNotCorrupt(struct pkt packet){
+int isPacketNotCorrupt(struct pkt packet)
+{
     return packet.checksum + calculateChecksum(packet) == -1;
 }
 
-void resendWindow(void){
-    int sendingEndIndex = pktBufferBase+WINDOW_SIZE < pktBufferNewIndex ? pktBufferBase+WINDOW_SIZE : pktBufferNewIndex;
+void resendWindow(void)
+{
+    int sendingEndIndex = pktBufferBase + WINDOW_SIZE < pktBufferNewIndex ? pktBufferBase + WINDOW_SIZE : pktBufferNewIndex;
     for (int i = pktBufferBase; i < sendingEndIndex; i++)
     {
-        printf("Resending Packet Seq %d\n",i);
+        printf("Resending Packet Seq %d\n", i);
         tolayer3(0, pktBuffer[i]);
     }
     starttimer(0, TIMER_INCREMENT);
 }
 
-void sendAck(uint8_t ack){
+void sendAck(uint8_t ack)
+{
     struct pkt ackPacket;
     ackPacket.acknum = ack;
     ackPacket.checksum = calculateChecksum(ackPacket);
@@ -106,15 +109,23 @@ void sendAck(uint8_t ack){
     tolayer3(1, ackPacket);
 }
 
+void printPayload(char payload[]){
+    for (int i = 0; i < 20; i++)
+        printf("%c", payload[i]);
+    printf("\n");
+}
+
 /*              End Utility           */
 
 /* called from layer 5, passed the data to be sent to other side */
 void A_output(struct msg message)
 {
-    printf("Attempting to send msg from A, msg: %s\n", message.data);
+    printf("Attempting to send msg from A, msg: ");
+    printPayload(message.data);
     if (pktBufferNewIndex == PACKET_BUFFER_SIZE - 1)
     {
-        printf("Buffer Full, Dropping packet(msg: %s)\n", message.data);
+        printf("Buffer Full, Dropping packet, msg: ");
+        printPayload(message.data);
         return;
     }
 
@@ -132,13 +143,15 @@ void A_output(struct msg message)
     {
         printf("Window Not Full, Sending Packet, Seq: %d\n", newPacket.seqnum);
         tolayer3(0, newPacket);
-        if(pktBufferNewIndex-1 == pktBufferBase){
+        if (pktBufferNewIndex - 1 == pktBufferBase)
+        {
             starttimer(0, TIMER_INCREMENT);
         }
-    }else{
-        printf("Window Full, Caching Packet, Seq: %d\n", pktBufferNewIndex-1);
     }
-
+    else
+    {
+        printf("Window Full, Caching Packet, Seq: %d\n", pktBufferNewIndex - 1);
+    }
 }
 
 void B_output(struct msg message) /* need be completed only for extra credit */
@@ -150,23 +163,34 @@ void B_output(struct msg message) /* need be completed only for extra credit */
 void A_input(struct pkt packet)
 {
     printf("Packet Received At A\n");
-    if(calculateChecksum(packet) == packet.checksum){
+    if (calculateChecksum(packet) == packet.checksum)
+    {
         printf("Packet Valid, Ack: %d\n", packet.acknum);
-        if(packet.acknum == pktBufferBase){
+        if (packet.acknum >= pktBufferBase)
+        {
             stoptimer(0);
-            pktBufferBase++;
+            int oldBase = pktBufferBase;
+            pktBufferBase = packet.acknum + 1;
             if (pktBufferBase + WINDOW_SIZE <= pktBufferNewIndex)
             {
-                tolayer3(0, pktBuffer[pktBufferBase + WINDOW_SIZE]);
-                printf("Sending New Packet, Seq: %d\n", pktBuffer[pktBufferBase + WINDOW_SIZE].seqnum);
+                for (int i = pktBufferBase + WINDOW_SIZE - (packet.acknum - oldBase); i < pktBufferBase + WINDOW_SIZE; i++)
+                {
+                    tolayer3(0, pktBuffer[i]);
+                    printf("Sending New Packet, Seq: %d\n", pktBuffer[i].seqnum);
+                }
             }
-            if (pktBufferBase < pktBufferNewIndex){
+            if (pktBufferBase < pktBufferNewIndex)
+            {
                 starttimer(0, TIMER_INCREMENT);
             }
-        }else{
+        }
+        else
+        {
             printf("Packet Ignored, Expecting: %d\n", pktBufferBase);
         }
-    }else{
+    }
+    else
+    {
         stoptimer(0);
         printf("Packet Corrupted, Resending window\n");
         resendWindow();
@@ -193,15 +217,22 @@ void A_init(void)
 void B_input(struct pkt packet)
 {
     printf("Packet Received At B\n");
-    if(isPacketNotCorrupt(packet)){
+    if (isPacketNotCorrupt(packet))
+    {
         printf("Packet NOT Corrupted, Expecting: %d, Got: %d\n", expectedSeq, packet.seqnum);
-        sendAck(packet.seqnum > expectedSeq ? expectedSeq-1: packet.seqnum);
-        if(packet.seqnum == expectedSeq){
-            printf("Sending Msg to Layer 5, Msg: %s\n", packet.payload);
+        if (packet.seqnum == expectedSeq)
+        {
+            sendAck(expectedSeq);
+            printf("Sending Msg to Layer 5, Msg: ");
+            printPayload(packet.payload);
             expectedSeq++;
             tolayer5(1, packet.payload);
+        }else{
+            sendAck(expectedSeq - 1);
         }
-    }else{
+    }
+    else
+    {
         printf("Packet Corrupted\n");
     }
 }
