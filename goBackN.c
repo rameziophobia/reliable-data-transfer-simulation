@@ -18,7 +18,7 @@
      (although some can be lost).
 **********************************************************************/
 
-#define BIDIRECTIONAL 0 /* change to 1 if you're doing extra credit */
+#define BIDIRECTIONAL 1 /* change to 1 if you're doing extra credit */
                         /* and write a routine called B_output */
 
 /* a "msg" is the data unit passed from layer 5 (teachers code) to layer  */
@@ -57,10 +57,10 @@ void stoptimer(int AorB);
 
 /*              Variables A               */
 
-struct pkt pktBuffer[PACKET_BUFFER_SIZE];
-int pktBufferBase;
-int pktBufferNewIndex;
-int currentSeq;
+struct pkt pktBuffer[2][PACKET_BUFFER_SIZE];
+int pktBufferBase[2];
+int pktBufferNewIndex[2];
+int currentSeq[2];
 
 float time = 0.000;
 
@@ -68,7 +68,7 @@ float time = 0.000;
 
 /*              Variables B               */
 
-int expectedSeq;
+int expectedSeq[2];
 
 /*              End Variables B           */
 
@@ -84,151 +84,123 @@ uint32_t calculateChecksum(struct pkt packet)
     return checksum;
 }
 
-int isPacketNotCorrupt(struct pkt packet)
-{
+int isPacketNotCorrupt(struct pkt packet){
     return packet.checksum + calculateChecksum(packet) == -1;
 }
 
-void resendWindow(void)
-{
-    int sendingEndIndex = pktBufferBase + WINDOW_SIZE < pktBufferNewIndex ? pktBufferBase + WINDOW_SIZE : pktBufferNewIndex;
-    for (int i = pktBufferBase; i < sendingEndIndex; i++)
-    {
-        printf("Resending Packet Seq %d\n", i);
-        tolayer3(0, pktBuffer[i]);
-    }
-    starttimer(0, TIMER_INCREMENT);
+char isAorB(int AorB) {
+    return (AorB == 0) ? 'A' : 'B';
 }
 
-void sendAck(uint8_t ack)
-{
+void resendWindow(int AorB){
+    int sendingEndIndex = pktBufferBase[AorB]+WINDOW_SIZE < pktBufferNewIndex[AorB] ? pktBufferBase[AorB]+WINDOW_SIZE : pktBufferNewIndex[AorB];
+    for (int i = pktBufferBase[AorB]; i < sendingEndIndex; i++)
+    {
+        printf("Resending Packet Seq %d\n",i);
+        tolayer3(AorB, pktBuffer[AorB][i]);
+    }
+    starttimer(AorB, TIMER_INCREMENT);
+}
+
+void sendAck(uint8_t ack,int AorB){
     struct pkt ackPacket;
     ackPacket.acknum = ack;
+    ackPacket.seqnum = -1;
     ackPacket.checksum = calculateChecksum(ackPacket);
     printf("Sending Ack: %d\n", ack);
-    tolayer3(1, ackPacket);
+    tolayer3(AorB, ackPacket); // 1
 }
 
-void printPayload(char payload[]){
+void printPayload(char payload[]) {
     for (int i = 0; i < 20; i++)
         printf("%c", payload[i]);
     printf("\n");
 }
 
-/*              End Utility           */
-
-/* called from layer 5, passed the data to be sent to other side */
-void A_output(struct msg message)
-{
-    printf("Attempting to send msg from A, msg: ");
+void sendMsg(struct msg message, int AorB) {
+    printf("Attempting to send msg from %c, msg: ", isAorB(AorB));
     printPayload(message.data);
     if (pktBufferNewIndex == PACKET_BUFFER_SIZE - 1)
     {
         printf("Buffer Full, Dropping packet, msg: ");
         printPayload(message.data);
-        return;
+            return;
     }
 
     struct pkt newPacket;
-    newPacket.seqnum = currentSeq;
-    currentSeq++;
+    newPacket.seqnum = currentSeq[AorB];
+    currentSeq[AorB]++;
     memcpy(&newPacket.payload, &message, sizeof(message));
     newPacket.acknum = 0;
-    newPacket.checksum = ~calculateChecksum(newPacket);
+    newPacket.checksum = ~calculateChecksum(newPacket); 
 
-    pktBuffer[pktBufferNewIndex] = newPacket;
-    pktBufferNewIndex++;
+    pktBuffer[AorB][pktBufferNewIndex[AorB]] = newPacket;
+    pktBufferNewIndex[AorB]++;
 
-    if (pktBufferBase + WINDOW_SIZE > pktBufferNewIndex)
+    if (pktBufferBase[AorB] + WINDOW_SIZE > pktBufferNewIndex[AorB])
     {
         printf("Window Not Full, Sending Packet, Seq: %d\n", newPacket.seqnum);
-        tolayer3(0, newPacket);
-        if (pktBufferNewIndex - 1 == pktBufferBase)
+        tolayer3(AorB, newPacket);
+        if (pktBufferNewIndex[AorB] - 1 == pktBufferBase[AorB]) 
         {
-            starttimer(0, TIMER_INCREMENT);
+            starttimer(AorB, TIMER_INCREMENT);
         }
     }
-    else
+    else 
     {
-        printf("Window Full, Caching Packet, Seq: %d\n", pktBufferNewIndex - 1);
+        printf("Window Full, Caching Packet, Seq: %d\n", pktBufferNewIndex[AorB] - 1);
     }
 }
-
-void B_output(struct msg message) /* need be completed only for extra credit */
-{
-    /*do nothing */
-}
-
-/* called from layer 3, when a packet arrives for layer 4 */
-void A_input(struct pkt packet)
-{
-    printf("Packet Received At A\n");
+void checkACK(struct pkt packet, int AorB) {
+    printf("Packet Received At %c\n" , isAorB(AorB));
     if (calculateChecksum(packet) == packet.checksum)
     {
         printf("Packet Valid, Ack: %d\n", packet.acknum);
-        if (packet.acknum >= pktBufferBase)
+        if (packet.acknum >= pktBufferBase[AorB])
         {
-            stoptimer(0);
-            int oldBase = pktBufferBase;
-            pktBufferBase = packet.acknum + 1;
-            if (pktBufferBase + WINDOW_SIZE <= pktBufferNewIndex)
+            stoptimer(AorB);
+            int oldBase = pktBufferBase[AorB];
+            pktBufferBase[AorB] = packet.acknum + 1;
+            if (pktBufferBase[AorB] + WINDOW_SIZE <= pktBufferNewIndex[AorB])
             {
-                for (int i = pktBufferBase + WINDOW_SIZE - (packet.acknum - oldBase); i < pktBufferBase + WINDOW_SIZE; i++)
+                for (int i = pktBufferBase[AorB] + WINDOW_SIZE - (packet.acknum - oldBase); i < pktBufferBase[AorB] + WINDOW_SIZE; i++)
                 {
-                    tolayer3(0, pktBuffer[i]);
-                    printf("Sending New Packet, Seq: %d\n", pktBuffer[i].seqnum);
+                    tolayer3(AorB, pktBuffer[AorB][i]);
+                    printf("Sending New Packet, Seq: %d\n", pktBuffer[AorB][i].seqnum);
                 }
             }
-            if (pktBufferBase < pktBufferNewIndex)
+            if (pktBufferBase[AorB] < pktBufferNewIndex[AorB])
             {
-                starttimer(0, TIMER_INCREMENT);
+                starttimer(AorB, TIMER_INCREMENT);
             }
         }
         else
         {
-            printf("Packet Ignored, Expecting: %d\n", pktBufferBase);
+            printf("Packet Ignored, Expecting: %d\n", pktBufferBase[AorB]);
         }
     }
     else
     {
-        stoptimer(0);
+        stoptimer(AorB);
         printf("Packet Corrupted, Resending window\n");
-        resendWindow();
+        resendWindow(AorB);
     }
 }
-
-/* called when A's timer goes off */
-void A_timerinterrupt(void)
-{
-    printf("Timer A Interrupt, Resending Window\n");
-    resendWindow();
-}
-
-/* the following routine will be called once (only) before any other */
-/* entity A routines are called. You can use it to do any initialization */
-void A_init(void)
-{
-    pktBufferBase = pktBufferNewIndex = currentSeq = 0;
-}
-
-/* Note that with simplex transfer from a-to-B, there is no B_output() */
-
-/* called from layer 3, when a packet arrives for layer 4 at B*/
-void B_input(struct pkt packet)
-{
-    printf("Packet Received At B\n");
+void checkMsg(struct pkt packet, int AorB) {
+    printf("Packet Received At %c\n",isAorB(AorB));
     if (isPacketNotCorrupt(packet))
     {
-        printf("Packet NOT Corrupted, Expecting: %d, Got: %d\n", expectedSeq, packet.seqnum);
-        if (packet.seqnum == expectedSeq)
+        printf("Packet NOT Corrupted, Expecting: %d, Got: %d\n", expectedSeq[AorB], packet.seqnum);
+        if (packet.seqnum == expectedSeq[AorB])
         {
-            sendAck(expectedSeq);
+            sendAck(expectedSeq[AorB], AorB);
             printf("Sending Msg to Layer 5, Msg: ");
             printPayload(packet.payload);
-            expectedSeq++;
-            tolayer5(1, packet.payload);
-        }else{
-            sendAck(expectedSeq - 1);
+            expectedSeq[AorB]++;
+            tolayer5(AorB, packet.payload);
+        }
+        else {
+            sendAck(expectedSeq[AorB] - 1, AorB);
         }
     }
     else
@@ -236,17 +208,72 @@ void B_input(struct pkt packet)
         printf("Packet Corrupted\n");
     }
 }
+/*              End Utility           */
+
+/* called from layer 5, passed the data to be sent to other side */
+void A_output(struct msg message)
+{
+    sendMsg(message, 0);
+}
+
+void B_output(struct msg message) /* need be completed only for extra credit */
+{
+    sendMsg(message, 1);
+}
+
+/* called from layer 3, when a packet arrives for layer 4 */
+void A_input(struct pkt packet)
+{
+    if (packet.seqnum == -1) {
+        checkACK(packet, 0);
+    }
+    else {
+        checkMsg(packet, 0);
+    }
+}
+
+/* called when A's timer goes off */
+void A_timerinterrupt(void)
+{
+    printf("Timer A Interrupt, Resending Window\n");
+    resendWindow(0);
+}
+
+/* the following routine will be called once (only) before any other */
+/* entity A routines are called. You can use it to do any initialization */
+void A_init(void)
+{
+    pktBufferBase[0] = pktBufferNewIndex[0] = currentSeq[0] = 0;
+    expectedSeq[0] = 0;
+}
+
+/* Note that with simplex transfer from a-to-B, there is no B_output() */
+
+/* called from layer 3, when a packet arrives for layer 4 at B*/
+void B_input(struct pkt packet)
+{
+    if (packet.seqnum == -1) {
+        checkACK(packet, 1);
+    }
+    else {
+        checkMsg(packet, 1);
+    }
+}
+
 
 /* called when B's timer goes off */
 void B_timerinterrupt(void)
 {
+    printf("Timer B Interrupt, Resending Window\n");
+    resendWindow(1);
 }
 
-/* the following rouytine will be called once (only) before any other */
+/* the following routine will be called once (only) before any other */
 /* entity B routines are called. You can use it to do any initialization */
 void B_init(void)
 {
-    expectedSeq = 0;
+    pktBufferBase[1] = pktBufferNewIndex[1] = currentSeq[1] = 0;
+    expectedSeq[1] = 0;
 }
 
 /*****************************************************************
